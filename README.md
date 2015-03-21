@@ -17,7 +17,7 @@ Tools for CCPM (Critical Chain Project Management) using Redmine and Excel
 5. 進捗確認時にチケットをCSVエクスポートして、Excelに貼り付け
 6. 日付再計算で、担当者別進捗状況、進捗推移グラフを更新
 
-　詳細は[こちら](http://www.asteriskweb.jp/blog/archives/7267)を参照
+　詳細は[こちら](http://www.asteriskweb.jp/blog/archives/7267)と[こちら](https://dl.dropboxusercontent.com/u/54939588/slides/X-ProjectsCCPM_OnlyMeRailsCant.html)を参照
 
 　X-Projects.xlsは v0.3.1 CCPMでは無い進捗率を入力するバージョン
 
