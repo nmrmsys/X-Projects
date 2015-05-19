@@ -1,5 +1,5 @@
 '========================================================
-' X-Projects v0.4.0 - Copyright (C) 2011 M.Nomura
+' X-Projects v0.5.0 - Copyright (C) 2011 M.Nomura
 '========================================================
 ' 変更履歴
 '  v0.1.0 初期バージョン
@@ -13,6 +13,7 @@
 '  v0.3.4 チケット削除・追加を考慮した予定工数履歴の更新
 '  v0.3.5 進捗報告日確認を追加
 '  v0.4.0 バッファ管理機能の追加
+'  v0.5.0 REST APIによるデータ登録・更新
 '========================================================
 
 '設定シート名
@@ -23,6 +24,14 @@ Dim nDayKosu       '１日と計算する工数
 Dim nDefKosu       '未入力時の予定工数
 Dim sHolidayOfWeek '休日の曜日
 Dim sReCalcDate    '再計算する開始日付
+
+'REST API 操作用
+Dim oCli As WebClient
+Dim oReq As WebRequest
+Dim sBaseUrl As String
+Dim sApiKey As String
+Dim sProjectId As String
+
 
 'CSV作成ボタン押下時
 Private Sub btnMakeCsv_Click()
@@ -612,4 +621,381 @@ Private Function WorkDateAdd(sDate, nDay)
     Loop While nAdd < nDay
     WorkDateAdd = Format(nDate, "yyyy/mm/dd")
 End Function
+
+
+'==================== REST API 操作処理群 ====================
+
+'RESTクライアント設定
+Private Sub RestClientSetup()
+    sBaseUrl = Sheets(cCfgShtName).Range("ベースURL")
+    sApiKey = Sheets(cCfgShtName).Range("APIキー")
+    sProjectId = Sheets(cCfgShtName).Range("プロジェクトID")
+    Set oCli = New WebClient
+    oCli.BaseUrl = sBaseUrl
+    Set oReq = New WebRequest
+    With oReq
+        .AddHeader "X-Redmine-API-Key", sApiKey
+        .Format = WebFormat.Json
+    End With
+End Sub
+
+'名称IDマップ取得
+Private Function GetNameIdMap(argResource As String) As Dictionary
+    Dim arTemp
+    arTemp = Split(argResource, "/")
+    sMapName = arTemp(UBound(arTemp))
+    If sMapName = "users" Then
+        sName = "login"
+    Else
+        sName = "name"
+    End If
+    With oReq
+        .Resource = argResource & ".json"
+        .Method = WebMethod.HttpGet
+        .AddQuerystringParam "limit", "200"
+    End With
+    Set oRes = oCli.Execute(oReq)
+    Set dicRet = New Dictionary
+    For Each oItem In oRes.Data(sMapName)
+        'Debug.Print oItem(sName) & ", " & oItem("id")
+        dicRet.Add oItem(sName), oItem("id")
+    Next
+    Set GetNameIdMap = dicRet
+End Function
+
+
+'Web読込ボタン押下時
+Private Sub btnWebLoad_Click()
+    If MsgBox("処理を実行しますか？", vbOKCancel + vbQuestion, "Web読込") = vbCancel Then
+        Exit Sub
+    End If
+    
+    '初期セットアップ
+    RestClientSetup
+    
+    'チケット一覧データを取得
+    With oReq
+        .Resource = "issues.json"
+        .Method = WebMethod.HttpGet
+        .AddQuerystringParam "project_id", sProjectId
+        .AddQuerystringParam "sort", "id"
+    End With
+    Set oRes = oCli.Execute(oReq)
+    
+    '各カラム位置取得
+    nProjectCol = Range("プロジェクト").Column
+    nTrackerCol = Range("トラッカー").Column
+    nStatusCol = Range("ステータス").Column
+    nPriorityCol = Range("優先度").Column
+    nSubjectCol = Range("題名").Column
+    nAuthorCol = Range("作成者").Column
+    nAssignCol = Range("担当者").Column
+    nUpdatedCol = Range("更新日").Column
+    nCategoryCol = Range("カテゴリ").Column
+    nVersionCol = Range("対象バージョン").Column
+    nStartDateCol = Range("開始日").Column
+    nDueDateCol = Range("期日").Column
+    nYKosuCol = Range("予定工数").Column
+    nEstHoursCol = Range("作業時間").Column
+    nDoneRatioCol = Range("進捗パーセント").Column
+    nCreatedCol = Range("作成日").Column
+    nAnswerCol = Range("回答").Column
+    nTKosuCol = Range("当初工数").Column
+    nPrivateCol = Range("プライベート").Column
+    nDescCol = Range("説明").Column
+
+    '取得したチケット一覧データを順に処理
+    For Each oItem In oRes.Data("issues")
+        'チケットIdが存在すれば取得データを反映
+        Set oFind = Range("Id").Find(oItem("id"), , xlFormulas, xlWhole)
+        If Not oFind Is Nothing Then
+            Cells(oFind.Row, nProjectCol) = oItem("project")("name")
+            Cells(oFind.Row, nTrackerCol) = oItem("tracker")("name")
+            Cells(oFind.Row, nStatusCol) = oItem("status")("name")
+            Cells(oFind.Row, nPriorityCol) = oItem("priority")("name")
+            Cells(oFind.Row, nSubjectCol) = oItem("subject")
+            Cells(oFind.Row, nAuthorCol) = oItem("author")("name")
+            Cells(oFind.Row, nAssignCol) = oItem("assigned_to")("name")
+            Cells(oFind.Row, nUpdatedCol) = Replace(Replace(oItem("updated_on"), "T", " "), "Z", "")
+            If oItem.Exists("category") Then
+                Cells(oFind.Row, nCategoryCol) = oItem("category")("name")
+            End If
+            If oItem.Exists("fixed_version") Then
+                Cells(oFind.Row, nVersionCol) = oItem("fixed_version")("name")
+            End If
+            Cells(oFind.Row, nStartDateCol) = oItem("start_date")
+            Cells(oFind.Row, nDueDateCol) = oItem("due_date")
+            Cells(oFind.Row, nYKosuCol) = oItem("estimated_hours")
+            'Cells(oFind.Row, nEstHoursCol) = oItem("estimated_hours")
+            'Cells(oFind.Row, nDoneRatioCol) = oItem("done_ratio")
+            Cells(oFind.Row, nCreatedCol) = Replace(Replace(oItem("created_on"), "T", " "), "Z", "")
+            If oItem.Exists("custom_fields") Then
+                'カスタムフィールドの反映
+                For Each oCustomFields In oItem("custom_fields")
+                    Select Case oCustomFields("name")
+                    Case "当初工数"
+                        Cells(oFind.Row, nTKosuCol) = oCustomFields("value")
+                    Case "回答"
+                        Cells(oFind.Row, nAnswerCol) = oCustomFields("value")
+                    End Select
+                Next
+            End If
+            If oItem.Exists("is_private") Then
+                Cells(oFind.Row, nPrivateCol) = oItem("is_private")
+            End If
+            If oItem.Exists("description") Then
+                'Cells(oFind.Row, nDescCol) = oItem("description")
+            End If
+        End If
+    Next
+End Sub
+
+'Web登録ボタン押下時
+Private Sub btnWebSave_Click()
+    If MsgBox("処理を実行しますか？", vbOKCancel + vbQuestion, "Web登録") = vbCancel Then
+        Exit Sub
+    End If
+    
+    'RESTクライアント設定
+    RestClientSetup
+    
+    '名称IDマップ取得
+    Set dicTrackers = GetNameIdMap("trackers")
+    Set dicStatuses = GetNameIdMap("issue_statuses")
+    Set dicPriorities = GetNameIdMap("enumerations/issue_priorities")
+    Set dicCategories = GetNameIdMap("projects/" & sProjectId & "/issue_categories")
+    Set dicVersions = GetNameIdMap("projects/" & sProjectId & "/versions")
+    Set dicCustomFields = GetNameIdMap("custom_fields")
+    Set dicUsers = GetNameIdMap("users")
+    
+    '最終行、各カラム位置取得
+    nLastRow = Cells.SpecialCells(xlCellTypeLastCell).Row
+    nNoCol = Range("No").Column
+    nIdCol = Range("Id").Column
+    nProjectCol = Range("プロジェクト").Column
+    nTrackerCol = Range("トラッカー").Column
+    nStatusCol = Range("ステータス").Column
+    nPriorityCol = Range("優先度").Column
+    nSubjectCol = Range("題名").Column
+    nAuthorCol = Range("作成者").Column
+    nAssignCol = Range("担当者").Column
+    nUpdatedCol = Range("更新日").Column
+    nCategoryCol = Range("カテゴリ").Column
+    nVersionCol = Range("対象バージョン").Column
+    nStartDateCol = Range("開始日").Column
+    nDueDateCol = Range("期日").Column
+    nYKosuCol = Range("予定工数").Column
+    nEstHoursCol = Range("作業時間").Column
+    nDoneRatioCol = Range("進捗パーセント").Column
+    nCreatedCol = Range("作成日").Column
+    nAnswerCol = Range("回答").Column
+    nTKosuCol = Range("当初工数").Column
+    nPrivateCol = Range("プライベート").Column
+    nDescCol = Range("説明").Column
+    
+    Dim Body As New Dictionary
+    Dim Issue As New Dictionary
+    Dim CustomFields As Collection
+    Dim CustomField1 As New Dictionary
+    Dim CustomField2 As New Dictionary
+    
+    Body.Add "issue", Issue
+    
+    'チケット行ごとにループ
+    For i = 2 To nLastRow
+        '未入力行はスキップ
+        If Cells(i, nNoCol) <> "" Then
+            'チケットIDが未入力の場合は登録、それ以外の場合は更新
+            If Cells(i, nIdCol) = "" Then
+                Debug.Print Cells(i, nNoCol) & ", New"
+                
+                With Issue
+                    .RemoveAll
+                    .Add "project_id", sProjectId
+                    .Add "tracker_id", dicTrackers(CStr(Cells(i, nTrackerCol)))
+                    .Add "status_id", dicStatuses(CStr(Cells(i, nStatusCol)))
+                    .Add "priority_id", dicPriorities(CStr(Cells(i, nPriorityCol)))
+                    .Add "subject", Cells(i, nSubjectCol)
+                    If Cells(i, nAuthorCol) <> "" Then
+                        .Add "author_id", dicUsers(CStr(Cells(i, nAuthorCol)))
+                    End If
+                    If Cells(i, nAssignCol) <> "" Then
+                        .Add "assigned_to_id", dicUsers(CStr(Cells(i, nAssignCol)))
+                    End If
+                    '.Add "updated_on", Cells(i, nUpdatedCol)
+                    If Cells(i, nCategoryCol) <> "" Then
+                        .Add "category_id", dicCategories(CStr(Cells(i, nCategoryCol)))
+                    End If
+                    If Cells(i, nVersionCol) <> "" Then
+                        .Add "fixed_version_id", dicVersions(CStr(Cells(i, nVersionCol)))
+                    End If
+                    .Add "start_date", Replace(Cells(i, nStartDateCol), "/", "-")
+                    .Add "due_date", Replace(Cells(i, nDueDateCol), "/", "-")
+                    .Add "estimated_hours", Cells(i, nYKosuCol)
+                    '.Add "estimated_hours", Cells(i, nEstHoursCol)
+                    '.Add "done_ratio", Cells(i, nDoneRatioCol)
+                    '.Add "created_on", Cells(i, nCreatedCol)
+                    If Cells(i, nAnswerCol) <> "" Or Cells(i, nTKosuCol) <> "" Then
+                        Set CustomFields = New Collection
+                        
+                        If Cells(i, nAnswerCol) <> "" Then
+                            CustomField1.RemoveAll
+                            CustomField1.Add "name", "回答"
+                            CustomField1.Add "id", dicCustomFields("回答")
+                            CustomField1.Add "value", CStr(Cells(i, nAnswerCol))
+                            CustomFields.Add CustomField1
+                        End If
+                        
+                        If Cells(i, nTKosuCol) <> "" Then
+                            CustomField2.RemoveAll
+                            CustomField2.Add "name", "当初工数"
+                            CustomField2.Add "id", dicCustomFields("当初工数")
+                            CustomField2.Add "value", CStr(Cells(i, nTKosuCol))
+                            CustomFields.Add CustomField2
+                        End If
+                        
+                        .Add "custom_fields", CustomFields
+                    End If
+                    .Add "is_private", Cells(i, nPrivateCol)
+                    .Add "description", Cells(i, nDescCol)
+                End With
+            
+                With oReq
+                    .Resource = "issues.json"
+                    .Method = WebMethod.HttpPost
+                    Set .Body = Body
+                End With
+                
+                Set oRes = oCli.Execute(oReq)
+                
+                Cells(i, nIdCol) = oRes.Data("issue")("id")
+            Else
+                Debug.Print Cells(i, nNoCol) & ", " & Cells(i, nIdCol)
+                
+                With Issue
+                    .RemoveAll
+                    .Add "project_id", sProjectId
+                    .Add "tracker_id", dicTrackers(CStr(Cells(i, nTrackerCol)))
+                    .Add "status_id", dicStatuses(CStr(Cells(i, nStatusCol)))
+                    .Add "priority_id", dicPriorities(CStr(Cells(i, nPriorityCol)))
+                    .Add "subject", Cells(i, nSubjectCol)
+                    If Cells(i, nAuthorCol) <> "" Then
+                        .Add "author_id", dicUsers(CStr(Cells(i, nAuthorCol)))
+                    End If
+                    If Cells(i, nAssignCol) <> "" Then
+                        .Add "assigned_to_id", dicUsers(CStr(Cells(i, nAssignCol)))
+                    End If
+                    '.Add "updated_on", Cells(i, nUpdatedCol)
+                    If Cells(i, nCategoryCol) <> "" Then
+                        .Add "category_id", dicCategories(CStr(Cells(i, nCategoryCol)))
+                    End If
+                    If Cells(i, nVersionCol) <> "" Then
+                        .Add "fixed_version_id", dicVersions(CStr(Cells(i, nVersionCol)))
+                    End If
+                    .Add "start_date", Replace(Cells(i, nStartDateCol), "/", "-")
+                    .Add "due_date", Replace(Cells(i, nDueDateCol), "/", "-")
+                    .Add "estimated_hours", Cells(i, nYKosuCol)
+                    '.Add "estimated_hours", Cells(i, nEstHoursCol)
+                    '.Add "done_ratio", Cells(i, nDoneRatioCol)
+                    '.Add "created_on", Cells(i, nCreatedCol)
+                    If Cells(i, nAnswerCol) <> "" Or Cells(i, nTKosuCol) <> "" Then
+                        Set CustomFields = New Collection
+                        
+                        If Cells(i, nAnswerCol) <> "" Then
+                            CustomField1.RemoveAll
+                            CustomField1.Add "name", "回答"
+                            CustomField1.Add "id", dicCustomFields("回答")
+                            CustomField1.Add "value", CStr(Cells(i, nAnswerCol))
+                            CustomFields.Add CustomField1
+                        End If
+                        
+                        If Cells(i, nTKosuCol) <> "" Then
+                            CustomField2.RemoveAll
+                            CustomField2.Add "name", "当初工数"
+                            CustomField2.Add "id", dicCustomFields("当初工数")
+                            CustomField2.Add "value", CStr(Cells(i, nTKosuCol))
+                            CustomFields.Add CustomField2
+                        End If
+                        
+                        .Add "custom_fields", CustomFields
+                    End If
+                    .Add "is_private", Cells(i, nPrivateCol)
+                    .Add "description", Cells(i, nDescCol)
+                End With
+            
+                With oReq
+                    .Resource = "issues/" & Cells(i, nIdCol) & ".json"
+                    .Method = WebMethod.HttpPut
+                    Set .Body = Body
+                End With
+                
+                Set oRes = oCli.Execute(oReq)
+            End If
+        End If
+    Next
+
+End Sub
+
+
+Private Sub testRedmineRestApi()
+    'https://github.com/VBA-tools/VBA-Web
+    'http://www.r-labs.org/projects/r-labs/wiki/Redmine_REST_API
+    'EnableLogging = True
+
+    Dim oCli As New WebClient
+    Dim oReq As New WebRequest
+    Dim oRes As WebResponse
+    
+    oCli.BaseUrl = Sheets(cCfgShtName).Range("ベースURL")
+    
+'    With oReq
+'        .AddHeader "X-Redmine-API-Key", Sheets(cCfgShtName).Range("APIキー")
+'        .Resource = "issues.json"
+'        .Method = WebMethod.HttpGet
+'        .Format = WebFormat.Json
+'        .AddQuerystringParam "project_id", Sheets(cCfgShtName).Range("プロジェクトID")
+'    End With
+'
+'    Set oRes = oCli.Execute(oReq)
+
+
+'    Dim Body As New Dictionary
+'    Dim Issue As New Dictionary
+'
+'    Issue.Add "project_id", Sheets(cCfgShtName).Range("プロジェクトID")
+'    Issue.Add "subject", "てすとＸＸ"
+'    Issue.Add "status_id", "2"
+'    Issue.Add "assigned_to_id", "testuser1"
+'    Body.Add "issue", Issue
+'
+'    With oReq
+'        .AddHeader "X-Redmine-API-Key", Sheets(cCfgShtName).Range("APIキー")
+'        .Resource = "issues.json"
+'        .Method = WebMethod.HttpPost
+'        .Format = WebFormat.Json
+'        Set .Body = Body
+'    End With
+'
+'    Set oRes = oCli.Execute(oReq)
+'
+'    Debug.Print oRes.Data("issues")(1)("subject")
+
+
+'    Dim Body As New Dictionary
+'    Dim Issue As New Dictionary
+'
+'    Issue.Add "status_id", "6"
+'    Body.Add "issue", Issue
+'
+'    With oReq
+'        .AddHeader "X-Redmine-API-Key", Sheets(cCfgShtName).Range("APIキー")
+'        .Resource = "issues/18424.json"
+'        .Method = WebMethod.HttpPut
+'        .Format = WebFormat.Json
+'        Set .Body = Body
+'    End With
+'
+'    Set oRes = oCli.Execute(oReq)
+    
+End Sub
 
